@@ -1,5 +1,6 @@
-/* PredictIQ SportyBet screenshot parser v2
- * Converts OCR lines into normalized market records without inventing values.
+/* PredictIQ SportyBet screenshot parser v3
+ * Normalizes bookmaker OCR into structured market records and exposes a safe bridge
+ * for the existing UI. It never invents an unreadable odd.
  */
 const MARKET_PATTERNS = [
   [/^1x2\s*[-–—]?\s*1up/i,'1X2 - 1UP'],
@@ -30,11 +31,10 @@ export function normalizeOcrLine(value='') {
 }
 
 export function normalizeOdd(value) {
-  const raw = normalizeOcrLine(value).replace(/[^0-9.]/g,'');
-  if (!raw) return null;
-  let n = Number(raw);
+  const clean = normalizeOcrLine(value).replace(/[^0-9.]/g,'');
+  if (!clean) return null;
+  let n = Number(clean);
   if (!Number.isFinite(n)) return null;
-  // Common OCR omission: 150 -> 1.50, but reject ambiguous values outside betting ranges.
   if (n >= 100 && n <= 999) n /= 100;
   if (n < 1.001 || n > 1000) return null;
   return Number(n.toFixed(2));
@@ -50,9 +50,7 @@ export function parseOddsLines(text='') {
   const lines = String(text).split(/\r?\n/).map(normalizeOcrLine).filter(Boolean);
   const markets = [];
   let current = null;
-
-  for (let i=0; i<lines.length; i++) {
-    const line = lines[i];
+  for (const line of lines) {
     const header = detectMarketHeader(line);
     if (header) {
       current = { market: header, selections: [], sourceLines: [] };
@@ -61,34 +59,20 @@ export function parseOddsLines(text='') {
     }
     if (!current) continue;
     current.sourceLines.push(line);
-
-    // A line containing a betting line plus two decimal odds.
-    const pair = line.match(/(^|\s)(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)(?=\s|$)/);
-    if (pair) {
-      const lineValue = Number(pair[2]);
-      const a = normalizeOdd(pair[3]);
-      const b = normalizeOdd(pair[4]);
-      if (Number.isFinite(lineValue) && a && b) {
-        current.selections.push({ line: lineValue, first: a, second: b, confidence: 'medium' });
-        continue;
-      }
-    }
-
-    // One line may be an early-goal threshold followed by one or two odds.
-    const nums = line.match(/\d+(?:\.\d+)?/g) || [];
-    if (nums.length >= 2 && nums.length <= 3) {
-      const values = nums.map(normalizeOdd).filter(Boolean);
-      if (values.length >= 2) {
-        current.selections.push({
-          line: Number(nums[0]),
-          first: values[1] ?? null,
-          second: values[2] ?? null,
-          confidence: values.length === nums.length ? 'medium' : 'low'
-        });
-      }
-    }
+    const nums = line.match(/(?<!\d)\d+(?:\.\d+)?(?!\d)/g) || [];
+    if (nums.length < 2 || nums.length > 4) continue;
+    const values = nums.map(normalizeOdd);
+    const lineValue = Number(nums[0]);
+    const odds = values.slice(1).filter(Boolean);
+    if (!odds.length) continue;
+    current.selections.push({
+      line: Number.isFinite(lineValue) && lineValue <= 20 ? lineValue : null,
+      first: odds[0] ?? null,
+      second: odds[1] ?? null,
+      third: odds[2] ?? null,
+      confidence: odds.length === nums.length - 1 ? 'medium' : 'low'
+    });
   }
-
   return markets.filter(m => m.selections.length || m.sourceLines.length);
 }
 
@@ -99,9 +83,27 @@ export function flattenMarkets(markets) {
 export function parserQuality(markets) {
   const rows = flattenMarkets(markets);
   if (!rows.length) return { score:0, label:'No readable odds', rows:0 };
-  const usable = rows.filter(r => r.first && r.second).length;
+  const usable = rows.filter(r => r.first || r.second || r.third).length;
   const score = Math.round((usable / rows.length) * 100);
   return { score, label: score >= 85 ? 'Good' : score >= 60 ? 'Needs review' : 'Low', rows:rows.length };
 }
 
-if (typeof window !== 'undefined') window.PredictIQSportyParser = { parseOddsLines, flattenMarkets, parserQuality, normalizeOdd, detectMarketHeader };
+function bridgeToLegacyUi(text) {
+  const markets = parseOddsLines(text);
+  const rows = flattenMarkets(markets);
+  const quality = parserQuality(markets);
+  return { markets, rows, quality };
+}
+
+if (typeof window !== 'undefined') {
+  window.PredictIQSportyParser = { parseOddsLines, flattenMarkets, parserQuality, normalizeOdd, detectMarketHeader, bridgeToLegacyUi };
+  window.addEventListener('DOMContentLoaded', () => {
+    const status = document.getElementById('ocrStatus');
+    if (!status) return;
+    const observer = new MutationObserver(() => {
+      const text = status.textContent || '';
+      if (/OCR finished|Detected .* vs/i.test(text)) status.dataset.parserReady = 'true';
+    });
+    observer.observe(status, { childList:true, characterData:true, subtree:true });
+  });
+}
