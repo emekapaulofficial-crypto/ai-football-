@@ -1,4 +1,4 @@
-/* PredictIQ AI — Prediction Engine v2
+/* PredictIQ AI — Prediction Engine v3
  * Deterministic statistical layer. It never claims a prediction is guaranteed.
  * Inputs: verified recent team form + bookmaker markets.
  */
@@ -26,8 +26,8 @@
     const scored = weightedAverage(rows.map(r => Number(r.gf) || 0));
     const conceded = weightedAverage(rows.map(r => Number(r.ga) || 0));
     const points = weightedAverage(rows.map(r => r.result === 'W' ? 3 : r.result === 'D' ? 1 : 0));
-    const scoredRate = rows.length ? rows.filter(r => r.gf > 0).length / rows.length : 0;
-    const cleanRate = rows.length ? rows.filter(r => r.ga === 0).length / rows.length : 0;
+    const scoredRate = rows.length ? rows.filter(r => Number(r.gf) > 0).length / rows.length : 0;
+    const cleanRate = rows.length ? rows.filter(r => Number(r.ga) === 0).length / rows.length : 0;
 
     return {
       ...team,
@@ -45,8 +45,6 @@
   }
 
   function expectedGoals(home, away) {
-    // Blend each team's recent attack with the opponent's recent concession rate.
-    // Home advantage is deliberately modest and is not allowed to dominate the data.
     const homeBase = home.weightedScored * 0.62 + away.weightedConceded * 0.38;
     const awayBase = away.weightedScored * 0.62 + home.weightedConceded * 0.38;
     const formAdjHome = 0.92 + (home.form - away.form) / 100 * 0.12;
@@ -77,7 +75,7 @@
   }
 
   function markets(cells) {
-    const result = { result: {}, totals: {}, btts: {} };
+    const result = { result: {}, totals: {}, asianTotals: {}, btts: {} };
     result.result.home = fromMatrix(cells, c => c.home > c.away);
     result.result.draw = fromMatrix(cells, c => c.home === c.away);
     result.result.away = fromMatrix(cells, c => c.home < c.away);
@@ -88,6 +86,17 @@
         under: fromMatrix(cells, c => c.total < line)
       };
     });
+
+    // Asian whole-goal lines have a push outcome. A push returns the stake,
+    // so it is reported separately rather than incorrectly treated as a win.
+    [1, 2, 3, 4, 5, 6].forEach(line => {
+      result.asianTotals[line] = {
+        overWin: fromMatrix(cells, c => c.total > line),
+        underWin: fromMatrix(cells, c => c.total < line),
+        push: fromMatrix(cells, c => c.total === line)
+      };
+    });
+
     result.btts.yes = fromMatrix(cells, c => c.home > 0 && c.away > 0);
     result.btts.no = 1 - result.btts.yes;
     result.doubleChance = {
@@ -112,6 +121,7 @@
       xg: { home: xg.home, away: xg.away, total: xg.home + xg.away },
       p: m.result,
       ou: m.totals,
+      asianTotals: m.asianTotals,
       btts: m.btts,
       doubleChance: m.doubleChance,
       correctScores: m.correctScores,
@@ -120,49 +130,85 @@
     };
   }
 
+  function normalizeMarket(value) {
+    return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
   function probabilityForMarket(o, m) {
-    const market = String(o.market || '').toLowerCase();
-    const sel = String(o.sel || '').toLowerCase();
-    if (market === '1x2') return sel === 'home' ? m.p.home : sel === 'draw' ? m.p.draw : sel === 'away' ? m.p.away : null;
-    if (market === 'over/under' || market === 'asian over/under' || market === 'early goals') {
-      const q = m.ou[o.line];
+    const market = normalizeMarket(o.market);
+    const sel = normalizeMarket(o.sel);
+
+    if (['1x2', 'match result', 'full time result'].includes(market)) {
+      if (['home', '1', 'home win'].includes(sel)) return m.p.home;
+      if (['draw', 'x'].includes(sel)) return m.p.draw;
+      if (['away', '2', 'away win'].includes(sel)) return m.p.away;
+      return null;
+    }
+
+    if (['over/under', 'early goals', 'match goals', 'team goals'].includes(market)) {
+      const q = m.ou[Number(o.line)];
       if (!q) return null;
       return sel === 'over' ? q.over : sel === 'under' ? q.under : null;
     }
-    if (market === 'double chance') {
+
+    if (['asian over/under', 'asian totals', 'asian total'].includes(market)) {
+      const q = m.asianTotals[Number(o.line)];
+      if (!q) return null;
+      return sel === 'over' ? q.overWin : sel === 'under' ? q.underWin : null;
+    }
+
+    if (['double chance', 'double-chance'].includes(market)) {
       const key = String(o.sel || '').replace(/\s+/g, '').toUpperCase();
       return m.doubleChance[key] ?? null;
     }
-    if (market === 'btts' || market === 'both teams to score') {
-      return /yes/i.test(o.sel) ? m.btts.yes : /no/i.test(o.sel) ? m.btts.no : null;
+
+    if (['btts', 'both teams to score', 'gg/ng'].includes(market)) {
+      return /yes|gg/i.test(o.sel) ? m.btts.yes : /no|ng/i.test(o.sel) ? m.btts.no : null;
     }
+
     return null;
   }
 
   function rankMarkets(odds, m) {
     return odds.map(o => {
       const p = probabilityForMarket(o, m);
-      if (p == null || !Number.isFinite(o.odd) || o.odd <= 1) return null;
-      const implied = 1 / o.odd;
+      if (p == null || !Number.isFinite(Number(o.odd)) || Number(o.odd) <= 1) return null;
+
+      const odd = Number(o.odd);
+      const implied = 1 / odd;
       const edge = p - implied;
-      // Safety rewards probability; value and data quality prevent a low-price market
-      // from automatically winning solely because its raw probability is high.
       const safety = p * 100;
       const value = clamp(50 + edge * 500, 0, 100);
       const confidence = m.dataConfidence;
       const score = safety * 0.55 + value * 0.25 + confidence * 0.20;
       const qualifying = p >= 0.70 && confidence >= 60 && edge >= -0.06;
+
       return {
-        ...o, probability: p, implied, edge, safety, value, confidence, score, qualifying
+        ...o,
+        odd,
+        probability: p,
+        implied,
+        edge,
+        safety,
+        value,
+        confidence,
+        score,
+        qualifying
       };
     }).filter(Boolean).sort((a, b) => b.score - a.score);
   }
 
   function analyze(odds, home, away) {
     const m = model(home, away);
-    const ranked = rankMarkets(odds, m);
+    const ranked = rankMarkets(Array.isArray(odds) ? odds : [], m);
     const qualifying = ranked.filter(x => x.qualifying).slice(0, 3);
-    return { ...m, ranked, top3: qualifying, noBet: qualifying.length === 0 };
+    return {
+      ...m,
+      ranked,
+      top3: qualifying,
+      noBet: qualifying.length === 0,
+      disclaimer: 'Probabilities are model estimates, not guarantees. Historical backtesting is required before making performance claims.'
+    };
   }
 
   window.PredictIQEngine = { model, analyze, rankMarkets, probabilityForMarket };
