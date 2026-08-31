@@ -1,18 +1,187 @@
-const S={odds:[],text:'',home:'',away:''};
-const $=id=>document.getElementById(id),clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
-const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function clean(s){return s.replace(/[^\p{L}\p{N}&.' -]/gu,' ').replace(/\s+/g,' ').trim()}
-function poisson(l,k){let p=Math.exp(-l);for(let i=1;i<=k;i++)p*=l/i;return p}
-$('dropzone').addEventListener('dragover',e=>{e.preventDefault();$('dropzone').classList.add('drag')});$('dropzone').addEventListener('dragleave',()=>$('dropzone').classList.remove('drag'));$('dropzone').addEventListener('drop',e=>{e.preventDefault();$('dropzone').classList.remove('drag');readImages([...e.dataTransfer.files])});$('fileInput').addEventListener('change',e=>readImages([...e.target.files]));
-async function readImages(files){const imgs=files.filter(f=>f.type.startsWith('image/'));if(!imgs.length)return;$('uploadList').innerHTML=imgs.map(f=>`<div class="upload-item"><span>${esc(f.name)}</span><span>${Math.round(f.size/1024)} KB</span></div>`).join('');let text='';$('ocrStatus').textContent='Reading screenshot…';for(const f of imgs){try{const r=await Tesseract.recognize(f,'eng',{logger:m=>{if(m.status==='recognizing text')$('ocrStatus').textContent=`Reading ${f.name}: ${Math.round(m.progress*100)}%`}});text+='\n'+r.data.text}catch(e){}}S.text=text;detectTeams(text);parseOdds(text);renderOdds();$('ocrStatus').textContent=S.home&&S.away?`Detected ${S.home} vs ${S.away}. Please confirm the names.`:'OCR finished. Please enter or correct the team names.'}
-function detectTeams(text){const lines=text.split(/\r?\n/).map(clean).filter(Boolean);for(const x of lines){const m=x.match(/^(.{2,36})\s+(?:vs\.?|v\.?|[-–])\s+(.{2,36})$/i);if(m){S.home=clean(m[1]);S.away=clean(m[2]);break}}if(!S.home||!S.away){const bad=/^(markets?|stats?|codes?|all|main|goals|corners|half|players?|teams?|match|over|under|asian|double chance|handicap|early goals|1st goal|details|live|new)$/i;const c=lines.filter(x=>x.length>=3&&x.length<=28&&!bad.test(x)&&!/[0-9]{2,}/.test(x));if(c.length>1){S.home=c[0];S.away=c[1]}}if(S.home)$('homeTeam').value=S.home;if(S.away)$('awayTeam').value=S.away}
-function parseOdds(text){let market='Other',out=[];for(const raw of text.split(/\r?\n/)){const x=raw.replace(/[*•]/g,' ').replace(/\s+/g,' ').trim();if(!x)continue;if(/^1x2/i.test(x)){market='1X2';continue}if(/^over\s*\/\s*under\s*-\s*early/i.test(x)){market='Early Goals';continue}if(/^asian\s+over/i.test(x)){market='Asian Over/Under';continue}if(/^over\s*\/\s*under$/i.test(x)){market='Over/Under';continue}if(/^double\s+chance/i.test(x)){market='Double Chance';continue}if(/^handicap/i.test(x)){market='Handicap';continue}const n=[...x.matchAll(/(?<!\d)(\d+(?:\.\d+)?)(?!\d)/g)].map(m=>+m[1]);if(!n.length)continue;const odds=n.filter(v=>v>=1.001&&v<=100);if(market==='Over/Under'&&odds.length>=2){out.push({market,line:n[0],sel:'Over',odd:odds[0]},{market,line:n[0],sel:'Under',odd:odds[1]})}else if(market==='Asian Over/Under'&&odds.length>=2){out.push({market,line:n[0],sel:'Over',odd:odds[0]},{market,line:n[0],sel:'Under',odd:odds[1]})}else if(market==='Early Goals'&&odds.length){out.push({market,line:n[0],sel:'Over',odd:odds[0]})}else if(market==='1X2'&&odds.length>=3){out.push({market,sel:'Home',odd:odds[0]},{market,sel:'Draw',odd:odds[1]},{market,sel:'Away',odd:odds[2]})}}S.odds=out.slice(0,100)}
-function renderOdds(){if(!S.odds.length){$('oddsTableWrap').innerHTML='<div class="empty-state">No readable markets yet. Upload a screenshot or use the demo.</div>';return}$('oddsTableWrap').innerHTML=`<table class="odds-table"><thead><tr><th>Market</th><th>Selection</th><th>Line</th><th>Odds</th></tr></thead><tbody>${S.odds.map((o,i)=>`<tr><td>${esc(o.market)}</td><td>${esc(o.sel)}</td><td>${o.line??'—'}</td><td><input class="odd-input" data-i="${i}" value="${o.odd.toFixed(2)}" type="number" min="1.001" step="0.01"></td></tr>`).join('')}</tbody></table>`;document.querySelectorAll('.odd-input').forEach(x=>x.onchange=e=>S.odds[+e.target.dataset.i].odd=+e.target.value)}
-function demo(){S.home='Copenhagen';S.away='Opponent';$('homeTeam').value=S.home;$('awayTeam').value=S.away;$('competition').value='Sample fixture';S.odds=[{market:'1X2',sel:'Home',odd:1.95},{market:'1X2',sel:'Draw',odd:3.60},{market:'1X2',sel:'Away',odd:3.80},...[[.5,1.02,12.5],[1.5,1.15,5.2],[2.5,1.5,2.55],[3.5,2.25,1.64],[4.5,3.75,1.26],[5.5,6.7,1.1]].flatMap(([line,o,u])=>[{market:'Over/Under',line,sel:'Over',odd:o},{market:'Over/Under',line,sel:'Under',odd:u}])];renderOdds();$('ocrStatus').textContent='Demo odds loaded. Replace them with your screenshot.'}
-$('demoBtn').onclick=demo;$('clearOddsBtn').onclick=()=>{S.odds=[];renderOdds()};
-async function form(team){try{const a=await fetch(`https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t=${encodeURIComponent(team)}`).then(r=>r.json());const t=a.teams?.[0];if(!t)return null;const d=await fetch(`https://www.thesportsdb.com/api/v1/json/3/eventslast.php?id=${t.idTeam}`).then(r=>r.json());const rows=(d.results||[]).filter(e=>e.intHomeScore!==null&&e.intAwayScore!==null).slice(0,5).map(e=>{const h=e.strHomeTeam===t.strTeam;const gf=+(h?e.intHomeScore:e.intAwayScore),ga=+(h?e.intAwayScore:e.intHomeScore);return{gf,ga,r:gf>ga?'W':gf===ga?'D':'L'}});if(!rows.length)return null;const w=[.30,.24,.20,.15,.11];let gf=0,ga=0,pts=0;rows.forEach((r,i)=>{gf+=r.gf*w[i];ga+=r.ga*w[i];pts+=(r.r==='W'?3:r.r==='D'?1:0)*w[i]});return{team:t.strTeam,rows,gf,ga,win:rows.filter(r=>r.r==='W').length,draw:rows.filter(r=>r.r==='D').length,loss:rows.filter(r=>r.r==='L').length,attack:clamp(50+gf*25,20,95),def:clamp(90-ga*28,20,95),form:pts/3*100}}catch(e){return null}}
-function fallback(side){return side==='home'?{team:S.home,rows:[],gf:1.5,ga:1,win:3,draw:1,loss:1,attack:88,def:62,form:73}:{team:S.away,rows:[],gf:1.15,ga:1.35,win:2,draw:1,loss:2,attack:79,def:52,form:53}}
-function model(h,a){const hx=clamp((h.gf*.62+a.ga*.38)*1.10,.2,4.2),ax=clamp((a.gf*.62+h.ga*.38)*.94,.15,3.8);let c=[],hw=0,dr=0,aw=0,z=0;for(let i=0;i<=8;i++)for(let j=0;j<=8;j++){const p=poisson(hx,i)*poisson(ax,j);c.push({i,j,p});z+=p;if(i>j)hw+=p;else if(i===j)dr+=p;else aw+=p}const P=p=>p/z,ou={};for(const l of [.5,1.5,2.5,3.5,4.5,5.5]){const over=c.filter(x=>x.i+x.j>l).reduce((s,x)=>s+x.p,0);ou[l]={over:P(over),under:1-P(over)}}return{hx,ax,p:{home:P(hw),draw:P(dr),away:P(aw)},ou}}
-function probability(o,m){if(o.market==='1X2')return o.sel==='Home'?m.p.home:o.sel==='Draw'?m.p.draw:m.p.away;const q=m.ou[o.line];if(q&&(o.market==='Over/Under'||o.market==='Asian Over/Under'))return o.sel==='Over'?q.over:q.under;return null}
-function report(h,a,m,data){const ranked=S.odds.map(o=>{const p=probability(o,m);return p==null?null:{...o,p,imp:1/o.odd,edge:p-1/o.odd}}).filter(Boolean).filter(x=>x.p>=.65).sort((x,y)=>y.p-x.p||y.edge-x.edge);$('results').classList.remove('hidden');$('resultMatch').textContent=`${h.team} vs ${a.team}`;$('resultCompetition').textContent=$('competition').value||'Match analysis';$('homeXg').textContent=m.hx.toFixed(2);$('awayXg').textContent=m.ax.toFixed(2);$('totalXg').textContent=(m.hx+m.ax).toFixed(2);$('matchProbabilities').innerHTML=[['Home',m.p.home],['Draw',m.p.draw],['Away',m.p.away]].map(([n,p])=>`<div class="prob-line"><span>${n}</span><div class="prob-bar"><i style="width:${p*100}%"></i></div><strong>${(p*100).toFixed(1)}%</strong></div>`).join('');$('formCards').innerHTML=[h,a].map(f=>`<div class="form-card"><h4>${esc(f.team)}</h4><div class="metrics"><div class="metric"><span>Attack</span><b>${f.attack.toFixed(0)}/100</b></div><div class="metric"><span>Defence</span><b>${f.def.toFixed(0)}/100</b></div><div class="metric"><span>Form</span><b>${f.form.toFixed(0)}/100</b></div><div class="metric"><span>Last 5</span><b>${f.win}W ${f.draw}D ${f.loss}L</b></div></div></div>`).join('');const top=ranked[0];$('noBetBox').classList.toggle('hidden',!!top);if(top){$('topPickMarket').textContent=`${top.market} — ${top.sel}${top.line!=null?' '+top.line:''}`;$('topPickProb').textContent=(top.p*100).toFixed(1)+'%';$('topPickOdds').textContent=top.odd.toFixed(2);$('topPickImplied').textContent=(top.imp*100).toFixed(1)+'%';$('topPickEdge').textContent=((top.edge*100>=0?'+':'')+(top.edge*100).toFixed(1)+' pp');$('topPickConfidence').textContent=data?(top.p>=.85?'HIGH':'MEDIUM'):'DATA LIMITED';$('topPickReason').textContent='Highest estimated probability among the readable markets. This is not a guarantee.'}else{$('topPickMarket').textContent='No qualifying market';$('topPickProb').textContent='—';$('topPickConfidence').textContent='NO BET'}$('topThree').innerHTML=ranked.slice(0,3).map((x,i)=>`<div class="pick-item"><div class="rank">#${i+1}</div><div><h4>${esc(x.market)} — ${esc(x.sel)}${x.line!=null?' '+x.line:''}</h4><p>Odds ${x.odd.toFixed(2)} • implied ${(x.imp*100).toFixed(1)}% • edge ${(x.edge*100).toFixed(1)} pp</p></div><div class="prob">${(x.p*100).toFixed(1)}%</div></div>`).join('')||'<div class="empty-state">No qualifying selections.</div>';$('modelNotes').innerHTML=[`Weighted recent form is used; the latest match carries the most weight.`,`Expected goals: ${m.hx.toFixed(2)} home / ${m.ax.toFixed(2)} away.`,`Bookmaker odds are compared as implied probability; they do not define the model prediction.`,`If verified data is unavailable, the UI marks the result as data-limited rather than pretending the estimate is fully reliable.`].map(x=>`<li>${x}</li>`).join('');$('results').scrollIntoView({behavior:'smooth'})}
-$('analyzeBtn').onclick=async()=>{const home=$('homeTeam').value.trim(),away=$('awayTeam').value.trim();if(!home||!away){alert('Please confirm both team names.');return}$('analyzeBtn').disabled=true;$('analyzeBtn').textContent='Analyzing…';S.home=home;S.away=away;let[h,a]=await Promise.all([form(home),form(away)]);const verified=!!(h&&a);h=h||fallback('home');a=a||fallback('away');report(h,a,model(h,a),verified);$('analyzeBtn').disabled=false;$('analyzeBtn').textContent='Analyze match'};
+const S = { odds: [], text: '', home: '', away: '' };
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const clean = s => String(s).replace(/[^\p{L}\p{N}&.' -]/gu, ' ').replace(/\s+/g, ' ').trim();
+
+$('dropzone').addEventListener('dragover', e => { e.preventDefault(); $('dropzone').classList.add('drag'); });
+$('dropzone').addEventListener('dragleave', () => $('dropzone').classList.remove('drag'));
+$('dropzone').addEventListener('drop', e => { e.preventDefault(); $('dropzone').classList.remove('drag'); readImages([...e.dataTransfer.files]); });
+$('fileInput').addEventListener('change', e => readImages([...e.target.files]));
+
+async function readImages(files) {
+  const imgs = files.filter(f => f.type.startsWith('image/'));
+  if (!imgs.length) return;
+  $('uploadList').innerHTML = imgs.map(f => `<div class="upload-item"><span>${esc(f.name)}</span><span>${Math.round(f.size/1024)} KB</span></div>`).join('');
+  let text = '';
+  $('ocrStatus').textContent = 'Reading screenshot…';
+  for (const f of imgs) {
+    try {
+      const r = await Tesseract.recognize(f, 'eng', { logger: m => {
+        if (m.status === 'recognizing text') $('ocrStatus').textContent = `Reading ${f.name}: ${Math.round(m.progress*100)}%`;
+      }});
+      text += '\n' + r.data.text;
+    } catch (e) { console.warn('OCR failed', e); }
+  }
+  S.text = text;
+  detectTeams(text);
+  parseOdds(text);
+  renderOdds();
+  $('ocrStatus').textContent = S.home && S.away
+    ? `Detected ${S.home} vs ${S.away}. Please confirm the names.`
+    : 'OCR finished. Please enter or correct the team names.';
+}
+
+function detectTeams(text) {
+  const lines = text.split(/\r?\n/).map(clean).filter(Boolean);
+  for (const x of lines) {
+    const m = x.match(/^(.{2,36})\s+(?:vs\.?|v\.?|[-–])\s+(.{2,36})$/i);
+    if (m) { S.home = clean(m[1]); S.away = clean(m[2]); break; }
+  }
+  if (!S.home || !S.away) {
+    const bad = /^(markets?|stats?|codes?|all|main|goals|corners|half|players?|teams?|match|over|under|asian|double chance|handicap|early goals|1st goal|details|live|new)$/i;
+    const candidates = lines.filter(x => x.length >= 3 && x.length <= 28 && !bad.test(x) && !/[0-9]{2,}/.test(x));
+    if (candidates.length > 1) { S.home = candidates[0]; S.away = candidates[1]; }
+  }
+  if (S.home) $('homeTeam').value = S.home;
+  if (S.away) $('awayTeam').value = S.away;
+}
+
+function parseOdds(text) {
+  let market = 'Other', out = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const x = raw.replace(/[*•]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!x) continue;
+    if (/^1x2/i.test(x)) { market = '1X2'; continue; }
+    if (/^over\s*\/\s*under\s*-\s*early/i.test(x)) { market = 'Early Goals'; continue; }
+    if (/^asian\s+over/i.test(x)) { market = 'Asian Over/Under'; continue; }
+    if (/^over\s*\/\s*under$/i.test(x)) { market = 'Over/Under'; continue; }
+    if (/^double\s+chance/i.test(x)) { market = 'Double Chance'; continue; }
+    if (/^both\s+teams\s+to\s+score|^btts/i.test(x)) { market = 'BTTS'; continue; }
+    if (/^handicap/i.test(x)) { market = 'Handicap'; continue; }
+
+    const nums = [...x.matchAll(/(?<!\d)(\d+(?:\.\d+)?)(?!\d)/g)].map(m => +m[1]);
+    if (!nums.length) continue;
+    const odds = nums.filter(v => v >= 1.001 && v <= 100);
+
+    if ((market === 'Over/Under' || market === 'Asian Over/Under') && odds.length >= 2) {
+      out.push({ market, line: nums[0], sel: 'Over', odd: odds[0] }, { market, line: nums[0], sel: 'Under', odd: odds[1] });
+    } else if (market === 'Early Goals' && odds.length) {
+      out.push({ market, line: nums[0], sel: 'Over', odd: odds[0] });
+    } else if (market === '1X2' && odds.length >= 3) {
+      out.push({ market, sel: 'Home', odd: odds[0] }, { market, sel: 'Draw', odd: odds[1] }, { market, sel: 'Away', odd: odds[2] });
+    } else if (market === 'BTTS' && odds.length >= 2) {
+      out.push({ market, sel: 'Yes', odd: odds[0] }, { market, sel: 'No', odd: odds[1] });
+    }
+  }
+  S.odds = out.slice(0, 150);
+}
+
+function renderOdds() {
+  if (!S.odds.length) {
+    $('oddsTableWrap').innerHTML = '<div class="empty-state">No readable markets yet. Upload a screenshot or use the demo.</div>';
+    return;
+  }
+  $('oddsTableWrap').innerHTML = `<table class="odds-table"><thead><tr><th>Market</th><th>Selection</th><th>Line</th><th>Odds</th></tr></thead><tbody>${S.odds.map((o,i) => `<tr><td>${esc(o.market)}</td><td>${esc(o.sel)}</td><td>${o.line ?? '—'}</td><td><input class="odd-input" data-i="${i}" value="${o.odd.toFixed(2)}" type="number" min="1.001" step="0.01"></td></tr>`).join('')}</tbody></table>`;
+  document.querySelectorAll('.odd-input').forEach(x => x.onchange = e => S.odds[+e.target.dataset.i].odd = +e.target.value);
+}
+
+function demo() {
+  S.home = 'Copenhagen'; S.away = 'Opponent';
+  $('homeTeam').value = S.home; $('awayTeam').value = S.away; $('competition').value = 'Sample fixture';
+  S.odds = [
+    {market:'1X2',sel:'Home',odd:1.95},{market:'1X2',sel:'Draw',odd:3.60},{market:'1X2',sel:'Away',odd:3.80},
+    ...[[.5,1.02,12.5],[1.5,1.15,5.2],[2.5,1.5,2.55],[3.5,2.25,1.64],[4.5,3.75,1.26],[5.5,6.7,1.1]].flatMap(([line,o,u]) => [
+      {market:'Over/Under',line,sel:'Over',odd:o},{market:'Over/Under',line,sel:'Under',odd:u}
+    ]),
+    {market:'BTTS',sel:'Yes',odd:1.72},{market:'BTTS',sel:'No',odd:2.05}
+  ];
+  renderOdds(); $('ocrStatus').textContent = 'Demo odds loaded. Replace them with your screenshot.';
+}
+$('demoBtn').onclick = demo;
+$('clearOddsBtn').onclick = () => { S.odds = []; renderOdds(); };
+
+async function getForm(team) {
+  try {
+    if (window.PredictIQFreeData?.recentMatches) return await window.PredictIQFreeData.recentMatches(team, 5);
+    if (window.fetchForm) return await window.fetchForm(team, 5);
+  } catch (e) { console.warn('Free data lookup failed', e); }
+  return null;
+}
+
+function formatPick(x) {
+  return `${x.market} — ${x.sel}${x.line != null ? ' ' + x.line : ''}`;
+}
+
+function renderReport(h, a, result) {
+  $('results').classList.remove('hidden');
+  $('resultMatch').textContent = `${h.team} vs ${a.team}`;
+  $('resultCompetition').textContent = $('competition').value || 'Match analysis';
+  $('resultDate').textContent = $('matchDate').value || '';
+  $('homeXg').textContent = result.xg.home.toFixed(2);
+  $('awayXg').textContent = result.xg.away.toFixed(2);
+  $('totalXg').textContent = result.xg.total.toFixed(2);
+
+  $('matchProbabilities').innerHTML = [['Home',result.p.home],['Draw',result.p.draw],['Away',result.p.away]].map(([n,p]) =>
+    `<div class="prob-line"><span>${n}</span><div class="prob-bar"><i style="width:${p*100}%"></i></div><strong>${(p*100).toFixed(1)}%</strong></div>`).join('');
+
+  $('formCards').innerHTML = [result.home, result.away].map(f => `<div class="form-card"><h4>${esc(f.team)}</h4><div class="metrics">
+    <div class="metric"><span>Attack</span><b>${f.attack.toFixed(0)}/100</b></div>
+    <div class="metric"><span>Defence</span><b>${f.defence.toFixed(0)}/100</b></div>
+    <div class="metric"><span>Form</span><b>${f.form.toFixed(0)}/100</b></div>
+    <div class="metric"><span>Last 5</span><b>${f.win ?? 0}W ${f.draw ?? 0}D ${f.loss ?? 0}L</b></div>
+  </div></div>`).join('');
+
+  const top = result.top3[0];
+  $('noBetBox').classList.toggle('hidden', !result.noBet);
+  if (top) {
+    $('topPickMarket').textContent = formatPick(top);
+    $('topPickProb').textContent = (top.probability*100).toFixed(1) + '%';
+    $('topPickOdds').textContent = top.odd.toFixed(2);
+    $('topPickImplied').textContent = (top.implied*100).toFixed(1) + '%';
+    $('topPickEdge').textContent = `${top.edge >= 0 ? '+' : ''}${(top.edge*100).toFixed(1)} pp`;
+    $('topPickConfidence').textContent = top.confidence >= 85 && top.probability >= .85 ? 'HIGH' : top.confidence >= 60 ? 'MEDIUM' : 'DATA LIMITED';
+    $('topPickReason').textContent = `Model probability ${ (top.probability*100).toFixed(1) }%, bookmaker implied probability ${(top.implied*100).toFixed(1)}%, data confidence ${top.confidence}%.`;
+  } else {
+    $('topPickMarket').textContent = 'No qualifying market';
+    $('topPickProb').textContent = '—'; $('topPickOdds').textContent = '—'; $('topPickImplied').textContent = '—'; $('topPickEdge').textContent = '—'; $('topPickConfidence').textContent = 'NO BET';
+    $('topPickReason').textContent = 'The model did not find a market that met its probability, data-quality and price filters.';
+  }
+
+  $('topThree').innerHTML = result.top3.map((x,i) => `<div class="pick-item"><div class="rank">#${i+1}</div><div><h4>${esc(formatPick(x))}</h4><p>Odds ${x.odd.toFixed(2)} • model ${(x.probability*100).toFixed(1)}% • implied ${(x.implied*100).toFixed(1)}% • edge ${(x.edge*100).toFixed(1)} pp</p></div><div class="prob">${(x.probability*100).toFixed(1)}%</div></div>`).join('') || '<div class="empty-state">No qualifying selections. Try another match or provide clearer odds/data.</div>';
+
+  const scores = result.correctScores.slice(0,3).map(x => `${x.home}-${x.away} ${(x.p*100).toFixed(1)}%`).join(' • ');
+  $('modelNotes').innerHTML = [
+    `Last five matches are weighted by recency; the newest match carries the most weight.`,
+    `Expected goals: ${result.xg.home.toFixed(2)} home / ${result.xg.away.toFixed(2)} away.`,
+    `Top score probabilities: ${scores || 'not available'}.`,
+    `Data confidence: ${result.dataConfidence}%. Missing or incomplete data lowers eligibility rather than being replaced with invented statistics.`,
+    `Bookmaker odds are used for price comparison, not as the model's prediction.`
+  ].map(x => `<li>${x}</li>`).join('');
+
+  $('results').scrollIntoView({ behavior:'smooth' });
+}
+
+$('analyzeBtn').onclick = async () => {
+  const home = $('homeTeam').value.trim(), away = $('awayTeam').value.trim();
+  if (!home || !away) { alert('Please confirm both team names.'); return; }
+  if (!S.odds.length) { alert('Please upload an odds screenshot first.'); return; }
+  $('analyzeBtn').disabled = true; $('analyzeBtn').textContent = 'Analyzing…';
+  S.home = home; S.away = away;
+  try {
+    const [h, a] = await Promise.all([getForm(home), getForm(away)]);
+    if (!h || !a) {
+      $('results').classList.remove('hidden');
+      $('noBetBox').classList.remove('hidden');
+      $('topPickMarket').textContent = 'No prediction — insufficient verified data';
+      $('topPickProb').textContent = '—'; $('topPickConfidence').textContent = 'NO BET';
+      $('topPickReason').textContent = 'We could not verify enough recent match data for both teams from the free data source.';
+      $('topThree').innerHTML = '<div class="empty-state">No prediction was generated. This protects users from fabricated statistics.</div>';
+      $('results').scrollIntoView({behavior:'smooth'});
+      return;
+    }
+    const result = window.PredictIQEngine.analyze(S.odds, h, a);
+    renderReport(h, a, result);
+  } finally {
+    $('analyzeBtn').disabled = false; $('analyzeBtn').textContent = 'Analyze match';
+  }
+};
