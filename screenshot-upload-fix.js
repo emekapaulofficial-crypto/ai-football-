@@ -60,7 +60,8 @@ function init(){
       return;
     }
 
-    if(!Array.isArray(window.S?.odds)||!window.S.odds.length){
+    const odds=(typeof S!=='undefined'&&Array.isArray(S.odds))?S.odds:[];
+    if(!odds.length){
       setStatus('No readable odds were detected from this screenshot. Please upload a clearer odds screenshot, then try Analyze match again.');
       $('oddsTableWrap')?.scrollIntoView({behavior:'smooth',block:'center'});
       return;
@@ -102,7 +103,7 @@ function init(){
       btn.textContent='Running model…';
       setStatus(`Verified data found: ${hn} matches for ${hf.team||home}, ${an} for ${af.team||away}. Running the model…`);
 
-      const result=window.PredictIQEngine?.analyze(window.S.odds,hf,af);
+      const result=window.PredictIQEngine?.analyze(odds,hf,af);
       if(!result)throw new Error('Prediction engine unavailable');
 
       renderReport(hf,af,result);
