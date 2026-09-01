@@ -1,26 +1,9 @@
-/* PredictIQ AI — Research & Explanation Layer v1
- * Produces auditable match reasons from verified inputs already returned by the data layer.
- * Never invents injuries, H2H, xG-provider data or news that the feed did not supply.
+/* PredictIQ AI — Research & Explanation Layer v2
+ * Turns verified model inputs into an auditable explanation.
+ * It never changes the model probability and never invents missing context.
  */
 (function(){'use strict';
-function build(home,away,model){
- const factors=Array.isArray(model?.factors)?model.factors.slice():[];
- const h=model?.home||{},a=model?.away||{};
- const winner=model?.prediction?.winner||'Draw';
- const best=model?.prediction?.probability||0;
- const total=model?.xg?.total||0;
- const totalPick=Object.entries(model?.ou||{}).map(([line,q])=>({line:Number(line),over:q.over,under:q.under})).sort((x,y)=>Math.max(y.over,y.under)-Math.max(x.over,x.under))[0];
- const keyPoints=[
-  `Recent form: ${h.team||home} ${Number(h.form||0).toFixed(0)}/100 vs ${a.team||away} ${Number(a.form||0).toFixed(0)}/100.`,
-  `Attack: ${h.team||home} ${Number(h.attack||0).toFixed(0)}/100 vs ${a.team||away} ${Number(a.attack||0).toFixed(0)}/100.`,
-  `Defence: ${h.team||home} ${Number(h.defence||0).toFixed(0)}/100 vs ${a.team||away} ${Number(a.defence||0).toFixed(0)}/100.`,
-  `Expected goals: ${(model?.xg?.home||0).toFixed(2)}–${(model?.xg?.away||0).toFixed(2)}; total ${total.toFixed(2)}.`,
-  `Data coverage: ${model?.dataConfidence||0}% of the required last-five-match sample.`
- ];
- const warnings=[];
- if((model?.dataConfidence||0)<100)warnings.push('The model has incomplete recent-form coverage, so confidence is reduced.');
- warnings.push('Injuries, suspensions, confirmed line-ups, tactical news and live market movement are only used when a connected data source supplies them.');
- return {winner,best,keyPoints,factors,totalPick,warnings,engineStack:['Recency-weighted form','Attack/defence strength','Venue split when available','Poisson score distribution','Over/Under + BTTS + Double Chance derived from score matrix','Optional Elo/context signals when supplied','Calibration/backtesting layer planned for later versions']};
-}
-window.PredictIQResearch={build};
-})();
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function build(home,away,model){const h=model?.home||{},a=model?.away||{},p=model?.p||{};const winner=model?.winner||'Draw',best=Math.max(p.home||0,p.draw||0,p.away||0),total=model?.xg?.total||0;const factors=Array.isArray(model?.factors)?model.factors.slice():[];const reasons=Array.isArray(model?.reasons)?model.reasons.slice():[];const warnings=[];if((model?.dataConfidence||0)<100)warnings.push('Recent-form coverage is incomplete; confidence is reduced.');if(Math.abs((p.home||0)-(p.away||0))<.10)warnings.push('Home and away probabilities are close, so this is a higher-variance fixture.');if((p.draw||0)>.28)warnings.push('The draw probability is elevated.');warnings.push('Injuries, suspensions, confirmed line-ups, weather and tactical news are only used when a connected source actually supplies verified data.');return{winner,best,keyPoints:[`Recent form: ${h.team||home} ${Number(h.form||0).toFixed(0)}/100 vs ${a.team||away} ${Number(a.form||0).toFixed(0)}/100.`,`Attack: ${h.team||home} ${Number(h.attack||0).toFixed(0)}/100 vs ${a.team||away} ${Number(a.attack||0).toFixed(0)}/100.`,`Defence: ${h.team||home} ${Number(h.defence||0).toFixed(0)}/100 vs ${a.team||away} ${Number(a.defence||0).toFixed(0)}/100.`,`Expected goals: ${(model?.xg?.home||0).toFixed(2)}–${(model?.xg?.away||0).toFixed(2)}; total ${total.toFixed(2)}.`],factors,reasons,warnings,engineStack:['Recency-weighted last-five form','Attack/defence strength','Team-strength signal','Home advantage','Dixon-Coles corrected Poisson score matrix','Over/Under, BTTS, Double Chance and correct-score probabilities','Optional bookmaker value comparison','Walk-forward calibration/backtesting as the next model-training layer']};}
+function render(model){const results=document.getElementById('results');if(!results)return;const x=build(model.home?.team,model.away?.team,model);let box=document.getElementById('researchEvidence');if(!box){box=document.createElement('div');box.id='researchEvidence';box.className='panel';results.appendChild(box);}const factors=x.factors.map(f=>{const d=Number(f.home)-Number(f.away);return `<div class="evidence-row"><div><strong>${esc(f.label)}</strong><span>${d>0?esc(model.home.team):d<0?esc(model.away.team):'Even'}</span></div><div class="evidence-score"><b>${Number(f.home).toFixed(0)}</b><i>vs</i><b>${Number(f.away).toFixed(0)}</b></div></div>`}).join('');box.innerHTML=`<div class="panel-head"><div><div class="step-label">RESEARCH & EVIDENCE</div><h3>Why ${esc(x.winner)} is the model favourite</h3></div><span class="muted">Evidence-based explanation</span></div><div class="evidence-grid"><div><h4>Key factors</h4><div class="evidence-list">${factors}</div></div><div><h4>Why the model says this</h4><ul class="notes">${x.reasons.map(r=>`<li>${esc(r)}</li>`).join('')}</ul></div></div><div class="research-risk"><h4>Risk factors</h4><ul class="notes">${x.warnings.map(r=>`<li>${esc(r)}</li>`).join('')}</ul></div><div class="method-line"><strong>Engine stack:</strong> ${x.engineStack.join(' • ')}</div>`;}
+const style=document.createElement('style');style.textContent=`.evidence-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}.evidence-list{display:grid;gap:8px}.evidence-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid rgba(255,255,255,.08);border-radius:10px}.evidence-row div:first-child{display:grid;gap:3px}.evidence-row span{font-size:12px;opacity:.7}.evidence-score{display:flex;gap:7px;align-items:center}.evidence-score i{font-size:11px;opacity:.5}.research-risk{margin-top:20px;padding-top:18px;border-top:1px solid rgba(255,255,255,.08)}.method-line{margin-top:16px;font-size:12px;opacity:.72}@media(max-width:700px){.evidence-grid{grid-template-columns:1fr}}`;document.head.appendChild(style);window.PredictIQResearch={build,render};})();
