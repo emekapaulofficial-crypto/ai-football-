@@ -1,128 +1,18 @@
-/* PredictIQ mobile OCR + analysis hardening.
- * Loaded after main.js. Replaces the old strict 5-match Analyze handler with
- * a visible, timeout-bounded flow that accepts 3+ verified recent matches.
- * It never fabricates missing team data.
- */
+/* PredictIQ: reliable screenshot OCR + match analysis. */
 (function(){
 'use strict';
-
-function init(){
-  const $=id=>document.getElementById(id);
-  const btn=$('analyzeBtn');
-  const status=$('ocrStatus');
-  if(!btn)return;
-
-  function setStatus(message){
-    if(status)status.textContent=message;
-    let box=$('analysisStatus');
-    if(!box){
-      box=document.createElement('div');
-      box.id='analysisStatus';
-      box.setAttribute('role','status');
-      box.style.cssText='margin-top:12px;padding:10px 12px;border:1px solid rgba(230,170,65,.45);border-radius:10px;font-size:14px;line-height:1.45;';
-      btn.insertAdjacentElement('afterend',box);
-    }
-    box.textContent=message;
-  }
-
-  function timeout(ms){
-    return new Promise((_,reject)=>setTimeout(()=>reject(new Error('TIMEOUT')),ms));
-  }
-
-  async function getVerifiedForm(team){
-    const name=String(team||'').trim();
-    if(!name)return null;
-    const variants=[name,
-      name.replace(/\bfootball club\b/ig,'').replace(/\bfc\b/ig,'').trim(),
-      name.replace(/\bsc\b/ig,'').trim(),
-      name.replace(/\bafc\b/ig,'').trim()
-    ].filter((v,i,a)=>v&&a.indexOf(v)===i);
-
-    for(const candidate of variants){
-      try{
-        const result=await Promise.race([
-          window.PredictIQFreeData?.recentMatches(candidate,5),
-          timeout(9000)
-        ]);
-        if(result?.rows?.length>=3)return result;
-      }catch(_){}
-    }
-    return null;
-  }
-
-  btn.onclick=async function(){
-    const home=$('homeTeam')?.value.trim()||'';
-    const away=$('awayTeam')?.value.trim()||'';
-
-    if(!home||!away){
-      setStatus('Please confirm both team names before analysis.');
-      $('homeTeam')?.focus();
-      return;
-    }
-
-    const odds=(typeof S!=='undefined'&&Array.isArray(S.odds))?S.odds:[];
-    if(!odds.length){
-      setStatus('No readable odds were detected from this screenshot. Please upload a clearer odds screenshot, then try Analyze match again.');
-      $('oddsTableWrap')?.scrollIntoView({behavior:'smooth',block:'center'});
-      return;
-    }
-
-    btn.disabled=true;
-    btn.textContent='Finding verified data…';
-    setStatus(`Checking recent verified results for ${home} and ${away}…`);
-
-    try{
-      const [hf,af]=await Promise.all([
-        getVerifiedForm(home),
-        getVerifiedForm(away)
-      ]);
-
-      const hn=hf?.rows?.length||0;
-      const an=af?.rows?.length||0;
-
-      if(!hf||!af){
-        $('results')?.classList.remove('hidden');
-        if($('resultMatch'))$('resultMatch').textContent=`${home} vs ${away}`;
-        if($('resultCompetition'))$('resultCompetition').textContent=$('competition')?.value||'Match analysis';
-        if($('resultDate'))$('resultDate').textContent=$('matchDate')?.value||'';
-        if($('topPickMarket'))$('topPickMarket').textContent='No verified prediction available';
-        if($('topPickProb'))$('topPickProb').textContent='—';
-        if($('topPickOdds'))$('topPickOdds').textContent='—';
-        if($('topPickImplied'))$('topPickImplied').textContent='—';
-        if($('topPickEdge'))$('topPickEdge').textContent='—';
-        if($('topPickConfidence'))$('topPickConfidence').textContent='NO BET';
-        if($('topPickReason'))$('topPickReason').textContent=`Verified recent data was insufficient (home: ${hn} matches, away: ${an} matches). The system will not invent missing statistics.`;
-        if($('topThree'))$('topThree').innerHTML='<div class="empty-state">Analysis stopped safely because verified team data was incomplete.</div>';
-        if($('noBetBox'))$('noBetBox').classList.remove('hidden');
-        if($('noBetBox'))$('noBetBox').innerHTML='<strong>No verified prediction.</strong><span>At least 3 recent verified matches are required for each team. Try the official team name or a clearer fixture screenshot.</span>';
-        setStatus(`Verified data found: ${hn} home matches and ${an} away matches. At least 3 for each team are required.`);
-        $('results')?.scrollIntoView({behavior:'smooth'});
-        return;
-      }
-
-      btn.textContent='Running model…';
-      setStatus(`Verified data found: ${hn} matches for ${hf.team||home}, ${an} for ${af.team||away}. Running the model…`);
-
-      const result=window.PredictIQEngine?.analyze(odds,hf,af);
-      if(!result)throw new Error('Prediction engine unavailable');
-
-      renderReport(hf,af,result);
-      setStatus(`Analysis complete. Data confidence: ${result.dataConfidence}%.`);
-    }catch(err){
-      console.error('PredictIQ analysis failed',err);
-      $('results')?.classList.remove('hidden');
-      if($('topPickMarket'))$('topPickMarket').textContent='Analysis could not be completed';
-      if($('topPickConfidence'))$('topPickConfidence').textContent='NO BET';
-      if($('topPickReason'))$('topPickReason').textContent='The verified data provider or prediction engine did not respond in time. No fabricated prediction was produced.';
-      if($('topThree'))$('topThree').innerHTML='<div class="empty-state">Please try again. If the team cannot be verified, the system will not invent results.</div>';
-      setStatus('Analysis stopped safely because verified data was unavailable or timed out. Please try again.');
-    }finally{
-      btn.disabled=false;
-      btn.textContent='Analyze match';
-    }
-  };
-}
-
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);
-else init();
+const $=id=>document.getElementById(id);
+const wait=ms=>new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),ms));
+function msg(t){const s=$('ocrStatus');if(s)s.textContent=t;let b=$('analysisStatus');if(!b){b=document.createElement('div');b.id='analysisStatus';b.setAttribute('role','status');b.style.cssText='margin-top:12px;padding:10px;border:1px solid rgba(230,170,65,.45);border-radius:10px;line-height:1.45';$('analyzeBtn')?.insertAdjacentElement('afterend',b)}b.textContent=t}
+function norm(s){return String(s||'').replace(/\s+/g,' ').trim()}
+function showResult(home,away,text,confidence){$('results')?.classList.remove('hidden');$('resultMatch').textContent=home+' vs '+away;$('resultCompetition').textContent=$('competition')?.value||'Match analysis';$('resultDate').textContent=$('matchDate')?.value||'';$('topPickMarket').textContent='No verified prediction';$('topPickProb').textContent='—';$('topPickOdds').textContent='—';$('topPickImplied').textContent='—';$('topPickEdge').textContent='—';$('topPickConfidence').textContent=confidence||'NO BET';$('topPickReason').textContent=text;$('topThree').innerHTML='<div class="empty-state">No fabricated prediction was produced.</div>';$('noBetBox').classList.remove('hidden');$('noBetBox').innerHTML='<strong>No verified prediction.</strong><span>'+text+'</span>';}
+async function ocr(files){if(!window.Tesseract)throw new Error('OCR library unavailable');let worker;try{msg('Starting screenshot reader…');worker=await Promise.race([Tesseract.createWorker('eng'),wait(20000)]);await worker.setParameters({tessedit_pageseg_mode:'6',preserve_interword_spaces:'1',user_defined_dpi:'300'});let out='';for(const f of files){msg('Reading '+f.name+'…');const r=await Promise.race([worker.recognize(f),wait(30000)]);out+='\n'+(r?.data?.text||'')}return out}finally{try{await worker?.terminate()}catch(_){}}}
+function parseTeams(text){const lines=text.split(/\r?\n/).map(norm).filter(Boolean);for(const l of lines){const m=l.match(/^(.{2,45})\s+(?:vs?\.?|[-–—])\s+(.{2,45})$/i);if(m)return[norm(m[1]),norm(m[2])]}return[null,null]}
+function setOdds(rows){if(typeof S!=='undefined'){S.odds=rows;window.S=S}if(typeof renderOdds==='function')renderOdds()}
+function parseOdds(text){const rows=[];const re=/\b(\d(?:\.\d{1,2})?)\b/g;let m;while((m=re.exec(text))){const odd=Number(m[1]);if(odd<1.01||odd>100)continue;const line=text.slice(Math.max(0,m.index-45),Math.min(text.length,m.index+45));let market='1X2',sel='Unknown';if(/over/i.test(line)){market='Over/Under';sel=/under/i.test(line)?'Under':'Over'}else if(/btts|both teams/i.test(line)){market='BTTS';sel=/no|ng/i.test(line)?'No':'Yes'}else if(/draw/i.test(line))sel='Draw';else if(/home/i.test(line))sel='Home';else if(/away/i.test(line))sel='Away';rows.push({market,sel,odd})}const seen=new Set();return rows.filter(x=>{const k=x.market+'|'+x.sel+'|'+x.odd;if(seen.has(k))return false;seen.add(k);return true}).slice(0,40)}
+function oddsOnly(home,away,odds){$('results').classList.remove('hidden');$('resultMatch').textContent=home+' vs '+away;$('resultCompetition').textContent=$('competition').value||'Odds analysis';$('resultDate').textContent=$('matchDate').value||'';const groups={};odds.forEach(o=>{const k=o.market+'|'+(o.line??'');(groups[k]??=[]).push(o)});const ranked=[];Object.values(groups).forEach(g=>{const inv=g.map(x=>1/Number(x.odd));const z=inv.reduce((a,b)=>a+b,0);g.forEach((x,i)=>ranked.push({...x,probability:inv[i]/z,implied:inv[i],edge:0}))});ranked.sort((a,b)=>b.probability-a.probability);const top=ranked[0];if(top){$('topPickMarket').textContent=(top.market||'Market')+' — '+(top.sel||'Selection');$('topPickProb').textContent=(top.probability*100).toFixed(1)+'%';$('topPickOdds').textContent=Number(top.odd).toFixed(2);$('topPickImplied').textContent=(top.implied*100).toFixed(1)+'%';$('topPickEdge').textContent='—'}$('topPickConfidence').textContent='MARKET ONLY';$('topPickReason').textContent='Recent team form could not be verified, so this is an odds-only view. No invented team statistics are used.';$('topThree').innerHTML=ranked.slice(0,3).map((x,i)=>`<div class="pick-item"><div class="rank">#${i+1}</div><div><h4>${x.market} — ${x.sel}</h4><p>Odds ${Number(x.odd).toFixed(2)} • normalized market probability ${(x.probability*100).toFixed(1)}%</p></div><div class="prob">${(x.probability*100).toFixed(1)}%</div></div>`).join('');$('noBetBox').classList.add('hidden');$('results').scrollIntoView({behavior:'smooth'});}
+async function form(team){try{return await Promise.race([window.PredictIQFreeData?.recentMatches(team,5),wait(12000)])}catch(_){return null}}
+async function analyze(){const home=norm($('homeTeam')?.value),away=norm($('awayTeam')?.value),odds=(typeof S!=='undefined'&&Array.isArray(S.odds))?S.odds:[];if(!home||!away){msg('Enter both team names first.');return}if(!odds.length){msg('No odds were read. Upload the screenshot again or load demo odds.');return}const b=$('analyzeBtn');b.disabled=true;b.textContent='Analyzing…';msg('Checking verified team data…');try{const[h,a]=await Promise.all([form(home),form(away)]);if(h?.rows?.length>=3&&a?.rows?.length>=3){msg('Verified data found. Running the model…');const r=window.PredictIQEngine?.analyze(odds,h,a);if(!r)throw new Error('engine');renderReport(h,a,r);msg('Analysis complete.')}else{msg('Verified team form is unavailable. Showing the odds-only analysis instead.');oddsOnly(home,away,odds)}}catch(e){console.error(e);msg('The data service did not respond. Showing odds-only analysis instead.');oddsOnly(home,away,odds)}finally{b.disabled=false;b.textContent='Analyze match'}}
+function init(){const fi=$('fileInput'),btn=$('analyzeBtn');if(!fi||!btn)return;fi.addEventListener('change',async e=>{e.stopImmediatePropagation();const files=[...e.target.files].filter(f=>f.type.startsWith('image/'));if(!files.length)return;try{msg(files.length+' screenshot selected. Reading now…');const text=await ocr(files);if(typeof S!=='undefined')S.text=text;const [h,a]=parseTeams(text);if(h)$('homeTeam').value=h;if(a)$('awayTeam').value=a;const rows=parseOdds(text);setOdds(rows);msg(h&&a?`Screenshot read: ${h} vs ${a}. ${rows.length} odds detected.`:`Screenshot read. ${rows.length} odds detected. Please confirm the team names.`)}catch(e){console.error(e);msg('Screenshot reading timed out or failed. Enter the team names manually and use Load demo odds to test analysis.')}} ,true);btn.onclick=analyze}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
