@@ -2,8 +2,10 @@
 (function(){
 'use strict';
 function init(){
- const input=document.getElementById('fileInput'),zone=document.getElementById('dropzone'),status=document.getElementById('ocrStatus');
- if(!input||!zone)return;
+ const oldInput=document.getElementById('fileInput'),zone=document.getElementById('dropzone'),status=document.getElementById('ocrStatus');
+ if(!oldInput||!zone)return;
+ const input=oldInput.cloneNode(true);
+ oldInput.parentNode.replaceChild(input,oldInput);
  zone.setAttribute('role','button');zone.setAttribute('tabindex','0');
  const openPicker=()=>{try{input.click();}catch(err){if(status)status.textContent='Please tap the screenshot button again.';}};
  zone.addEventListener('click',function(e){if(e.target!==input){e.preventDefault();openPicker();}});
