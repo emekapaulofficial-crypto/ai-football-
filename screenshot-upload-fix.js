@@ -1,19 +1,11 @@
-/* PredictIQ screenshot compatibility layer.
- * main.js owns the match-analysis upload and Analyze button.
- * This file intentionally does NOT register a second file-input handler and
- * does NOT replace the Analyze button handler. That used to make the page
- * require odds even though odds are optional.
- */
+/* PredictIQ legacy compatibility loader. The main analysis is now team-first. */
 (function(){
-  'use strict';
-  function init(){
-    const btn=document.getElementById('pickScreenshotBtn');
-    const input=document.getElementById('fileInput');
-    if(btn&&input&&!btn.dataset.bound){
-      btn.dataset.bound='1';
-      btn.addEventListener('click',()=>input.click());
-    }
-  }
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});
-  else init();
+'use strict';
+function load(){
+ const s=document.createElement('script');
+ s.src='analysis-controller.js?v=20260907-1';
+ s.async=false;
+ document.head.appendChild(s);
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',load,{once:true});else load();
 })();
